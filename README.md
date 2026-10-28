@@ -144,6 +144,7 @@ The first values come from `config.properties`, created by the first build (Goog
 | `tmdb_region` | Your country (two letters): which titles are on which app | `US` |
 | `watchmode_key` | Optional, free [Watchmode](https://api.watchmode.com/) key: a pick opens the title's page in its app | empty |
 | `plex_url` and `plex_token` | Optional, your Plex server's `plex.direct` address and token: its newest titles join the picks and open on their page | empty |
+| `trakt_client_id` | Optional, your Trakt app's Client ID: sign in on the TV and the picks come from your Trakt watchlist, opening in Stremio (Google TV) | empty |
 | `latitude`, `longitude` | Your city, for the weather and the sunset | New York |
 | `city` | The name on the weather card | `Weather` |
 | `hide_animation` | Leave cartoons and anime out of the picks | `false` |
@@ -198,6 +199,15 @@ This is for Google TV and Android TV, and it needs the TMDB key and at least one
 - **`plex_token`** is on the same address, after `X-Plex-Token=`. It gives access to your Plex account, and any app on the TV can read the APK it is built into, so use the token of a Plex Home *managed user* with access to your libraries, not your own, and never commit it.
 
 The TV talks to your server directly on your network. If the server can't be reached, the other picks load as usual.
+
+### Your Trakt watchlist (optional)
+
+Signed in to [Trakt](https://trakt.tv), the picks are your Trakt watchlist instead of what's trending: movies on the Movies tab, shows on the Shows tab, tagged "Trakt", with TMDB's photos (so the TMDB key is still needed). Each list takes the next 12 movies and 12 shows of the watchlist, so all of it comes round over the days. Selecting one opens its page in [Stremio](https://www.stremio.com) (by its IMDb id; without one, Stremio's home).
+
+1. Create an app at trakt.tv → *Settings* → *Your API Apps* (Trakt's new apps are PKCE apps with no secret; redirect URI `http://localhost`), and put its Client ID after `trakt_client_id=` in `config.properties`. Keep it private, as with the other keys. Build and install.
+2. On the TV: *Home Settings* → *Trakt*. Scan the QR code or open auth.trakt.tv/activate on your phone and enter the code the TV shows. The picks change a moment later.
+
+The sign-in stays on the TV (never in `config.properties` or the log) and renews itself. *Home Settings* → *Trakt* → *Sign out* takes it away. Signed out, Stremio missing, Trakt unreachable or an empty watchlist: the trending picks, as before. Google TV and Android TV only.
 
 ## Going back
 

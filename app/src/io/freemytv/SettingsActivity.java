@@ -150,7 +150,7 @@ public class SettingsActivity extends Activity {
 
     static final class SettingsView extends View implements Choreographer.FrameCallback {
         private static final int MAIN = 0, HOME_CHOICE = 1, HOME_SETTINGS = 2, REMOTE_KEYS = 3, PICKER = 4, SHELF_EDIT = 5,
-                POWER = 6, TMDB_KEY = 7, PICKS = 8, PICK_FROM = 9;
+                POWER = 6, TMDB_KEY = 7, PICKS = 8, PICK_FROM = 9, TRAKT = 10;
         private static final float LIST_ROW_H = 68, LIST_ROW_GAP = 6;
         private static final int PICK_VISIBLE = 9;
         private static final float LIST_X = 1000, LIST_R = 1824, LIST_TOP = 186, ROW_GAP = 8, CHOICE_H = 104;
@@ -191,7 +191,15 @@ public class SettingsActivity extends Activity {
         private int[] keyRowIds = new int[0];
         private StaticLayout keyPurpose, keySteps, keyStatus;
         private String keyHelp;   // the purpose and the steps, for TalkBack
-        private Paint keyHeading, keyUrl, qrPaint, qrSlot;
+        private Paint keyHeading, keyUrl, qrPaint, qrSlot, traktCodePaint;
+        // Trakt: the sign-in code on screen and its QR code (the address), the rows, and what the screen says. A new
+        // generation stops the old code's polling thread.
+        private Trakt.Code traktCode;
+        private Bitmap traktQr;
+        private int[] traktRowIds = new int[0];
+        private volatile int traktGen;
+        private StaticLayout traktPurpose, traktSteps, traktStatus;
+        private String traktUser = "";   // read with the state (poll), not while drawing
         private final RectF tmp = new RectF(), rowRect = new RectF(), focusBox = new RectF();
         private JSONObject state = new JSONObject(), recs = new JSONObject();
         private boolean hasKey;
@@ -217,6 +225,7 @@ public class SettingsActivity extends Activity {
                 state = HomeMode.state(getContext());
                 sleepLeft = SleepTimer.minutesLeft(getContext());
                 hasKey = Recs.hasKey(getContext());
+                traktUser = Trakt.user(getContext());
                 recs = Recs.status(getContext());
                 String updatesWas = updatesValue();
                 updates = Updates.state(getContext());
@@ -334,6 +343,9 @@ public class SettingsActivity extends Activity {
                     return app[1] + ", " + (place >= 0 ? Ui.trf("on the shelf, place {n}", "n", place + 1)
                             : Ui.tr("not on the shelf"));
                 }
+                case TRAKT:
+                    if (row >= traktRowIds.length) return "";
+                    return row == 0 && traktPurpose != null ? traktLabel(traktRowIds[0]) + ". " + traktSpoken() : traktLabel(traktRowIds[row]);
                 case TMDB_KEY:
                     if (row >= keyRowIds.length) return "";
                     // TalkBack can't see the drawn text: the first row also says what the key is for and how to get one.
@@ -375,6 +387,10 @@ public class SettingsActivity extends Activity {
             running = false;
             handler.removeCallbacks(poll);
             Choreographer.getInstance().removeFrameCallback(this);
+            if (traktCode != null) {   // no polling under another app, after Home or in standby
+                stopTraktCode();
+                setTraktStatus(Ui.tr("This code has expired."), false);
+            }
             if (keyPage != null) {   // the phone's page answers only while its code shows (not after Home, standby, another app)
                 stopKeyPage();
                 setKeyStatus(Ui.tr("This code has expired."), false);
@@ -430,6 +446,8 @@ public class SettingsActivity extends Activity {
             qrPaint.setFilterBitmap(false);
             qrSlot = new Paint(Paint.ANTI_ALIAS_FLAG);
             qrSlot.setColor(0x14FFFFFF);
+            traktCodePaint = Ui.numbers(Ui.displaySemibold, 64 * k, 0xFFFFFFFF);
+            traktCodePaint.setLetterSpacing(0.12f);
         }
 
         private boolean busy() {
@@ -455,6 +473,7 @@ public class SettingsActivity extends Activity {
                 case SHELF_EDIT: return Math.min(PICK_VISIBLE, shelfRows.size());
                 case POWER: return powerRows().length;
                 case TMDB_KEY: return keyRowIds.length;
+                case TRAKT: return traktRowIds.length;
                 case PICKS: return picksLabels().length;
                 case PICK_FROM: return Math.min(PICK_VISIBLE, services.size());
                 default: return Prefs.KEYS.length;
@@ -487,6 +506,7 @@ public class SettingsActivity extends Activity {
 
             if (screen == MAIN) drawMain(c, seconds); else if (screen == HOME_CHOICE) drawChoice(c); else if (screen == PICKER) drawPicker(c); else if (screen == SHELF_EDIT) drawShelfEditor(c);
             else if (screen == TMDB_KEY) drawKey(c);
+            else if (screen == TRAKT) drawTrakt(c);
             else if (screen == PICK_FROM) drawServices(c);
             else drawList(c);
         }
@@ -746,6 +766,8 @@ public class SettingsActivity extends Activity {
                                 screen = REMOTE_KEYS;
                             } else if (screen == TMDB_KEY) {
                                 closeKeyScreen();
+                            } else if (screen == TRAKT) {
+                                closeTraktScreen();
                             } else if (screen == PICKS) {
                                 focus = PICKS_ROW;
                                 pickScroll = 0;
@@ -775,7 +797,7 @@ public class SettingsActivity extends Activity {
 
         private static final String[] UNITS = {"auto", "C", "F"}, THEMES = {"auto", "light", "dark"};
         /** Home Settings: language, temperature, theme, my photos, sounds, picks, watch from the screensaver, weather, city,
-         *  forecast, now playing, quotes, one row per coin, then the TMDB key and updates (the last row). */
+         *  forecast, now playing, quotes, one row per coin, then the TMDB key, Trakt and updates (the last row). */
         private static final int PHOTOS_ROW = 3, PICKS_ROW = 5, SAVER_ROW = 6, WEATHER_ROW = 7, CITY_ROW = 8, FORECAST_ROW = 9,
                 PLAYING_ROW = 10, QUOTES_ROW = 11, COIN_ROWS = 12;
         /** Home Settings rows on screen at once (what fits above the hints at 1080p); a longer list scrolls. */
@@ -804,16 +826,21 @@ public class SettingsActivity extends Activity {
             l.add("Solana");
             if (dollar()) l.add(Ui.tr("Dollar"));
             l.add(Ui.tr("TMDB key"));
+            l.add("Trakt");
             l.add(Ui.tr("Updates"));
             return l.toArray(new String[0]);
         }
 
-        /** The Updates row: the last one, after the coins and the TMDB key. */
+        /** The Updates row: the last one, after the coins, the TMDB key and Trakt. */
         private int updatesRow() {
             return settingLabels().length - 1;
         }
 
         private int keyRow() {
+            return updatesRow() - 2;
+        }
+
+        private int traktRow() {
             return updatesRow() - 1;
         }
 
@@ -852,8 +879,9 @@ public class SettingsActivity extends Activity {
             v[PLAYING_ROW] = onOff(Prefs.nowPlaying());
             v[QUOTES_ROW] = onOff(Prefs.quotes());
             // No quotes widget, nowhere to show prices: the coins read as off (and stay locked) until it is back on.
-            for (int i = COIN_ROWS; i < v.length - 2; i++) v[i] = onOff(Prefs.quotes() && Prefs.coin(i - COIN_ROWS));
-            v[v.length - 2] = keyValue();
+            for (int i = COIN_ROWS; i < v.length - 3; i++) v[i] = onOff(Prefs.quotes() && Prefs.coin(i - COIN_ROWS));
+            v[v.length - 3] = keyValue();
+            v[v.length - 2] = traktUser.isEmpty() ? Ui.tr("Not signed in") : traktUser;
             v[v.length - 1] = updatesValue();
             return v;
         }
@@ -876,7 +904,8 @@ public class SettingsActivity extends Activity {
                 case MAIN:
                     return i == 5 ? Capabilities.NEED_REMOTE_BUTTONS : i == 6 ? Capabilities.NEED_ADB : null;
                 case HOME_SETTINGS:
-                    return pickScroll + i == PLAYING_ROW ? Capabilities.NEED_LISTENER : null;
+                    return pickScroll + i == PLAYING_ROW ? Capabilities.NEED_LISTENER
+                            : pickScroll + i == traktRow() ? Capabilities.NEED_TRAKT : null;
                 case POWER: {
                     int id = powerRows()[i];
                     return id == P_WHERE ? Capabilities.NEED_OVERLAY : null;
@@ -1145,7 +1174,7 @@ public class SettingsActivity extends Activity {
                     break;
                 case QUOTES_ROW: Prefs.setQuotes(!Prefs.quotes()); break;
                 default:
-                    if (row >= keyRow() || !Prefs.quotes()) return;   // the key and Updates act on OK only
+                    if (row >= keyRow() || !Prefs.quotes()) return;   // the key, Trakt and Updates act on OK only
                     Prefs.setCoin(row - COIN_ROWS, !Prefs.coin(row - COIN_ROWS));
                     break;
             }
@@ -1465,6 +1494,242 @@ public class SettingsActivity extends Activity {
             }
         }
 
+        // MARK: - Trakt (a code typed at auth.trakt.tv/activate; the watchlist becomes the picks, opening in Stremio)
+
+        private static final int T_NEW = 0, T_SIGN_OUT = 1;
+
+        private static String traktLabel(int id) {
+            return id == T_NEW ? Ui.tr("New code") : Ui.tr("Sign out");
+        }
+
+        /** What TalkBack reads on the first row: what it's for and, while a code shows, the steps and the code. */
+        private String traktSpoken() {
+            String text = traktPurpose.getText().toString();
+            Trakt.Code code = traktCode;
+            StaticLayout steps = traktSteps, status = traktStatus;
+            if (code != null && steps != null) text += " " + steps.getText() + " " + code.user.replace("", " ").trim();
+            return status == null ? text : text + " " + status.getText();
+        }
+
+        private void openTraktScreen() {
+            screen = TRAKT;
+            pickScroll = 0;
+            focus = 0;
+            traktStatus = null;
+            String purpose = Ui.tr("Your Trakt watchlist becomes the picks, and OK on one opens it in Stremio.");
+            traktPurpose = StaticLayout.Builder.obtain(purpose, 0, purpose.length(), notice, Math.round((LIST_R - LIST_X - 60) * k))
+                    .setMaxLines(3).setEllipsize(TextUtils.TruncateAt.END).build();
+            traktUser = Trakt.user(getContext());
+            if (traktUser.isEmpty()) startTraktCode();
+            else setTraktStatus(Ui.trf("Signed in as {user}.", "user", traktUser), false);
+            traktRowsChanged();
+        }
+
+        private void closeTraktScreen() {
+            stopTraktCode();
+            screen = HOME_SETTINGS;
+            int row = traktRow(), rows = settingLabels().length;
+            pickScroll = Math.max(0, Math.min(row - 3, rows - Math.min(SETTINGS_VISIBLE, rows)));
+            focus = row - pickScroll;
+        }
+
+        /** Signed out: New code (another one, or the first again after it ran out). Signed in: Sign out. */
+        private void traktRowsChanged() {
+            traktRowIds = new int[] {traktUser.isEmpty() ? T_NEW : T_SIGN_OUT};
+            if (screen != TRAKT) return;
+            focus = 0;
+            invalidate();
+            spoken.focusMoved();
+        }
+
+        private void activateTrakt() {
+            if (focus >= traktRowIds.length) return;
+            if (traktRowIds[focus] == T_NEW) startTraktCode();
+            else askTraktSignOut();
+        }
+
+        /** Asks Trakt for a code, shows it, then asks every few seconds (Trakt says how often) until it's typed or runs out. */
+        private void startTraktCode() {
+            stopTraktCode();
+            int gen = traktGen;
+            Context c = getContext().getApplicationContext();
+            setTraktStatus(Ui.tr("Getting a code…"), false);
+            new Thread(() -> {
+                // Nothing may leave this thread: :home's watchdog counts it as a home screen crash.
+                try {
+                    pollTrakt(c, gen);
+                } catch (RuntimeException e) {
+                    AppLog.w("trakt: " + e.getClass().getSimpleName());
+                }
+            }, "TraktSignIn").start();
+        }
+
+        /** The sign-in thread: a code, then a look every `interval` seconds until it's typed, refused or runs out. */
+        private void pollTrakt(Context c, int gen) {
+            Trakt.Code code;
+            try {
+                code = Trakt.newCode();
+            } catch (Exception e) {
+                String why = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                AppLog.w("trakt: code: " + why);
+                handler.post(() -> traktCodeEnded(gen, Ui.trf("Couldn't reach Trakt: {error}", "error", why)));
+                return;
+            }
+            handler.post(() -> showTraktCode(gen, code));
+            int interval = code.interval;
+            while (gen == traktGen) {
+                if (System.currentTimeMillis() >= code.expiresAt) {
+                    handler.post(() -> traktCodeEnded(gen, Ui.tr("This code has expired.")));
+                    return;
+                }
+                try {
+                    Thread.sleep(interval * 1000L);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (gen != traktGen) return;
+                try {
+                    int answer = Trakt.poll(c, code);
+                    if (answer == Trakt.SLOW_DOWN) interval += 5;
+                    if (answer == Trakt.SIGNED_IN) {
+                        Trakt.checkRefresh(c);
+                        handler.post(() -> traktSignedIn(gen));
+                        return;
+                    }
+                } catch (Trakt.Ended e) {
+                    String why = Trakt.EXPIRED.equals(e.getMessage()) ? Ui.tr("This code has expired.")
+                            : Trakt.DENIED.equals(e.getMessage()) ? Ui.tr("Trakt refused the sign-in.")
+                            : Ui.trf("Couldn't reach Trakt: {error}", "error", e.getMessage());
+                    handler.post(() -> traktCodeEnded(gen, why));
+                    return;
+                } catch (Exception e) {   // the network: ask again next time
+                    AppLog.w("trakt: poll: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+                }
+            }
+        }
+
+        private void showTraktCode(int gen, Trakt.Code code) {
+            if (gen != traktGen || screen != TRAKT) return;
+            traktCode = code;
+            try {
+                traktQr = qrBitmap(Qr.encode(code.url));
+            } catch (RuntimeException e) {
+                traktQr = null;   // the address is in the steps anyway
+            }
+            String steps = Ui.trf("On your phone, scan this code or open {url}, then enter this code:", "url",
+                    code.url.replaceFirst("^https?://", ""));
+            int width = Math.round((LIST_R - LIST_X - 60 - QR_SIDE - 40) * k);
+            traktSteps = StaticLayout.Builder.obtain(steps, 0, steps.length(), notice, width).setLineSpacing(6 * k, 1).build();
+            // While the code waits (10 minutes at most), the TV's screensaver doesn't cover it.
+            activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            setTraktStatus(Ui.tr("Waiting for you to enter the code."), false);
+        }
+
+        private void traktCodeEnded(int gen, String why) {
+            if (gen != traktGen) return;
+            stopTraktCode();
+            setTraktStatus(why, true);
+        }
+
+        private void traktSignedIn(int gen) {
+            if (gen != traktGen) return;
+            stopTraktCode();
+            traktUser = Trakt.user(getContext());
+            setTraktStatus(Ui.tr("Signed in. The picks arrive in a moment."), false);
+            traktRowsChanged();
+            Recs.get(getContext()).refreshIfStale();
+        }
+
+        /** The code goes (its thread stops at its next look) and the screen may sleep again. */
+        private void stopTraktCode() {
+            traktGen++;
+            traktCode = null;
+            traktQr = null;
+            traktSteps = null;
+            activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+
+        private void setTraktStatus(String text, boolean error) {
+            int width = Math.round((LIST_R - LIST_X - 60) * k);
+            TextPaint paint = error ? new TextPaint(warn) : notice;
+            traktStatus = StaticLayout.Builder.obtain(text, 0, text.length(), paint, width)
+                    .setMaxLines(3).setEllipsize(TextUtils.TruncateAt.END).build();
+            if (screen == TRAKT && running) announceForAccessibility(text);
+            invalidate();
+        }
+
+        /** Asks, then signs out: the tokens leave the TV at once, and Trakt is told in the background. */
+        private void askTraktSignOut() {
+            Context c = getContext().getApplicationContext();
+            AlertDialog dialog = new AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle(Ui.tr("Sign out of Trakt?"))
+                    .setPositiveButton(Ui.tr("Sign out"), (d, which) -> new Thread(() -> {
+                        try {
+                            Trakt.signOut(c);
+                        } catch (RuntimeException e) {   // never out of this thread (the watchdog counts it)
+                            AppLog.w("trakt: sign out: " + e.getClass().getSimpleName());
+                        }
+                        handler.post(() -> {
+                            traktUser = Trakt.user(c);
+                            traktStatus = null;
+                            traktRowsChanged();
+                            Recs.get(c).refreshIfStale();   // the trending picks again
+                        });
+                    }, "TraktSignOut").start())
+                    .setNegativeButton(Ui.tr("Cancel"), null)
+                    .show();
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus();   // one stray OK keeps the sign-in
+        }
+
+        /** The row, what it's for, then the QR code with the steps and the code beside it, and the status. */
+        private void drawTrakt(Canvas c) {
+            float x = LIST_X * k + 30 * k, pitch = LIST_ROW_H + LIST_ROW_GAP;
+            c.drawText("Trakt", x, (LIST_TOP - 24) * k, keyHeading);
+            int rows = rowCount();
+            for (int i = 0; i < rows; i++) {
+                float y = (LIST_TOP + 20 + i * pitch) * k;
+                rowRect.set(LIST_X * k, y, LIST_R * k, y + LIST_ROW_H * k);
+                float f = drawRowBackground(c, i);
+                rowLabel.setColor(blend(0xF2FFFFFF, INK, f));
+                c.drawText(traktLabel(traktRowIds[i]), rowRect.left + 30 * k, rowRect.centerY() + Ui.halfCap(rowLabel), rowLabel);
+            }
+            float top = (LIST_TOP + 20 + rows * pitch + 16) * k;
+            StaticLayout purpose = traktPurpose;
+            if (purpose != null) {
+                c.save();
+                c.translate(x, top);
+                purpose.draw(c);
+                c.restore();
+                top += purpose.getHeight() + 26 * k;
+            }
+            Trakt.Code code = traktCode;
+            StaticLayout steps = traktSteps;
+            if (code != null && steps != null) {
+                Bitmap qr = traktQr;
+                if (qr != null) {
+                    int n = qr.getWidth();
+                    float side = Math.max(1, (int) (QR_SIDE * k / n)) * n;   // whole pixels per module
+                    tmp.set(x, top, x + side, top + side);
+                    c.drawBitmap(qr, null, tmp, qrPaint);
+                }
+                float sx = x + (QR_SIDE + 40) * k;
+                c.save();
+                c.translate(sx, top);
+                steps.draw(c);
+                c.restore();
+                c.drawText(code.user, sx, top + steps.getHeight() + 80 * k, traktCodePaint);
+                top += QR_SIDE * k + 44 * k;
+            }
+            StaticLayout status = traktStatus;
+            if (status != null) {
+                c.save();
+                c.translate(x, top + 20 * k - status.getLineBaseline(0));
+                status.draw(c);
+                c.restore();
+            }
+        }
+
+
         // MARK: - My Photos (sent from a computer: tools/photos.py)
 
         /** OK on My Photos: asks, then deletes them all. */
@@ -1752,6 +2017,8 @@ public class SettingsActivity extends Activity {
                     : Ui.tr("OK removes them; the arrows turn them on or off."))
                     : screen == POWER && powerRow() != P_SHOW && unavailable(focus) == null ? Ui.tr("OK opens the list. ← → change the value.")
                     : screen == HOME_SETTINGS && from + focus == keyRow() ? Ui.tr("OK: send it from your phone, or type it.")
+                    : screen == HOME_SETTINGS && from + focus == traktRow() && unavailable(focus) == null
+                    ? Ui.tr("OK: sign in with a code, or sign out.")
                     : screen == HOME_SETTINGS && from + focus == updatesRow() ? (Updates.ready(updates, installed)
                     ? Ui.tr("OK installs it; Android asks first.") : Ui.tr("OK checks for a new version."))
                     : Ui.tr("OK or the arrows change the value.")), LIST_X * k + 30 * k, hy, hint);
@@ -1822,6 +2089,13 @@ public class SettingsActivity extends Activity {
                 return;
             } else if (screen == HOME_SETTINGS && pickScroll + focus == keyRow()) {
                 openKeyScreen();
+            } else if (screen == HOME_SETTINGS && pickScroll + focus == traktRow()) {
+                openTraktScreen();
+            } else if (screen == TRAKT) {
+                activateTrakt();
+                invalidate();
+                spoken.focusMoved();
+                return;
             } else if (screen == TMDB_KEY) {
                 activateKey();
                 invalidate();

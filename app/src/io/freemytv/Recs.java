@@ -45,6 +45,9 @@ import java.util.concurrent.Executors;
  *
  * Each person uses their own free TMDB key: given on the TV (Home Settings > TMDB key, which the APK on GitHub's
  * releases needs), else config.properties' "tmdb_key", built into the app. It never goes to the log.
+ *
+ * Signed in to Trakt (Home Settings > Trakt), the picks are the Trakt watchlist instead, opening in Stremio; TMDB still
+ * gives their photos and details. Signed out, Trakt unreachable or the watchlist empty: the trending ones, as before.
  */
 final class Recs {
     static final class Pick {
@@ -53,6 +56,7 @@ final class Recs {
         String title, backdrop, poster, meta = "", app, pkg;   // poster: the portrait image of the narrow cards
         String link;            // opens the title in its app (looked up with Watchmode), or null: the app's home
         boolean detailed;
+        boolean trakt;          // from the Trakt watchlist: opens in Stremio, never looked up with Watchmode
         java.io.File photo;     // one of your own photos (Photos): no title, no caption
     }
 
@@ -140,6 +144,7 @@ final class Recs {
         SERVICE_NAME.put("amediateka", "Амедиатека");
         SERVICE_NAME.put("wink", "Wink");
         SERVICE_NAME.put("plex", "Plex");
+        SERVICE_NAME.put("stremio", "Stremio");
     }
     /** Country for "what streams where" (config.properties "tmdb_region", e.g. US, GB, BR). */
     static final String REGION = Place.region();
@@ -510,6 +515,14 @@ final class Recs {
     // MARK: - TMDB
 
     private void fetchList(int p) throws Exception {
+        if (Trakt.signedIn(context) && HomeApps.launchIntent(context.getPackageManager(), STREMIO) != null) {
+            try {
+                if (fetchTrakt(p)) return;
+                AppLog.w("trakt: the watchlist has nothing with photos: trending picks instead");
+            } catch (Exception e) {
+                AppLog.w("trakt: " + e.getMessage() + ": trending picks instead");
+            }
+        }
         // None of the services we know is on the TV (or hide_services hides them all): no region would change that.
         boolean any = false;
         for (String[] s : SERVICES) any |= installed(s[2]);
@@ -670,6 +683,8 @@ final class Recs {
         if (!poster.isEmpty() && !"null".equals(poster)) p.poster = poster;
         String best = bestBackdrop(o.optJSONObject("images"));
         if (best != null) p.backdrop = best;
+        String backdrop = o.optString("backdrop_path", "");
+        if ((p.backdrop == null || p.backdrop.isEmpty()) && !backdrop.isEmpty() && !"null".equals(backdrop)) p.backdrop = backdrop;
         List<String> parts = new ArrayList<>();
         JSONArray genres = o.optJSONArray("genres");
         if (p.kind.equals("tv")) parts.add(Ui.tr("Series"));
@@ -679,6 +694,14 @@ final class Recs {
         }
         String length = p.kind.equals("movie") ? runtime(o.optInt("runtime")) : seasons(o.optInt("number_of_seasons"));
         if (length != null) parts.add(length);
+        if (p.trakt) {
+            p.app = "stremio";
+            p.pkg = STREMIO;
+            parts.add("Trakt");
+            p.meta = String.join(" · ", parts);
+            p.detailed = true;
+            return;
+        }
         JSONObject wp = o.optJSONObject("watch/providers");
         JSONObject br = wp == null ? null : wp.optJSONObject("results") == null ? null : wp.optJSONObject("results").optJSONObject(REGION);
         JSONArray flat = br == null ? null : br.optJSONArray("flatrate");
@@ -787,7 +810,9 @@ final class Recs {
     private long sourceStamp() {
         long stamp = ((key().hashCode() * 31L + REGION.hashCode()) * 31L + (Config.HIDE_ANIMATION ? 1 : 0)) * 31L + Config.PLEX_URL.hashCode();
         for (String[] service : SERVICES) stamp = stamp * 31L + (installed(service[2]) ? service[2].hashCode() : 0);
-        return stamp;
+        // Signing in or out of Trakt (or installing Stremio) fetches again at once.
+        stamp = stamp * 31L + Trakt.user(context).hashCode();
+        return stamp * 31L + (HomeApps.launchIntent(context.getPackageManager(), STREMIO) != null ? 1 : 0);
     }
 
     // MARK: - Watchmode (the title's own page in its app; the free plan's web addresses are what the apps open)
@@ -797,7 +822,7 @@ final class Recs {
     }
 
     private boolean needsLink(Pick p) {
-        return linksOn() && p.id > 0 && p.pkg != null && p.link == null
+        return linksOn() && p.id > 0 && !p.trakt && p.pkg != null && p.link == null
                 && cache.getString(linkKey(p), null) == null && System.currentTimeMillis() >= linkRetryAt;
     }
 
@@ -809,7 +834,7 @@ final class Recs {
 
     /** Sets p.link from what was looked up before, or looks it up (2 requests of the free plan's 2,500 a month). */
     private void findLink(Pick p) {
-        if (!linksOn() || p.id < 0 || p.pkg == null || p.link != null) return;
+        if (!linksOn() || p.id < 0 || p.trakt || p.pkg == null || p.link != null) return;
         String saved = cache.getString(linkKey(p), null);
         if (saved != null) {
             p.link = saved.isEmpty() ? null : saved;
@@ -884,6 +909,52 @@ final class Recs {
         } finally {
             c.disconnect();
         }
+    }
+
+    // MARK: - Trakt (your watchlist, opening in Stremio)
+
+    static final String STREMIO = "com.stremio.one";
+    /** Watchlist titles per kind in one list (6 hours); the next list takes the next ones, so all of them come round. */
+    private static final int TRAKT_EACH = 12;
+
+    /** The watchlist as the list: false when it has nothing with photos. Throws when Trakt can't be reached. */
+    private boolean fetchTrakt(int p) throws Exception {
+        long turn = System.currentTimeMillis() / LIST_EVERY;
+        List<Pick> movies = traktPicks("movies", "movie", turn), shows = traktPicks("shows", "tv", turn);
+        if (movies.isEmpty() && shows.isEmpty()) return false;
+        List<Pick> list = new ArrayList<>();
+        alternate(list, new java.util.HashSet<>(), movies, shows, 2 * TRAKT_EACH);
+        picks = list;
+        period = p;
+        listAt = System.currentTimeMillis();
+        listLanguage = Ui.language;
+        return true;
+    }
+
+    /** This turn's TRAKT_EACH of the watchlist's movies or shows, with their TMDB details (titles without a photo left out). */
+    private List<Pick> traktPicks(String type, String kind, long turn) throws Exception {
+        List<String[]> all = Trakt.watchlist(context, type);
+        List<Pick> out = new ArrayList<>();
+        int n = all.size(), from = n <= TRAKT_EACH ? 0 : (int) Math.floorMod(turn * TRAKT_EACH, (long) n);
+        for (int i = 0; i < Math.min(n, TRAKT_EACH); i++) {
+            String[] item = all.get((from + i) % n);
+            Pick pick = new Pick();
+            pick.id = Integer.parseInt(item[0]);
+            pick.kind = kind;
+            pick.title = item[2];
+            pick.backdrop = "";
+            pick.poster = "";
+            pick.trakt = true;
+            // Stremio's own route to the title page (tested on a BRAVIA: movie and series pages open); no IMDb id: its home.
+            if (!item[1].isEmpty()) pick.link = "stremio:///detail/" + (kind.equals("movie") ? "movie" : "series") + "/" + item[1];
+            try {
+                fetchDetails(pick);
+            } catch (Exception e) {
+                continue;
+            }
+            if (!pick.backdrop.isEmpty()) out.add(pick);
+        }
+        return out;
     }
 
     // MARK: - Plex (your own library: config.properties "plex_url" and "plex_token")
@@ -1099,7 +1170,7 @@ final class Recs {
                 a.put(new JSONObject().put("id", p.id).put("kind", p.kind).put("title", p.title).put("backdrop", p.backdrop)
                         .put("poster", p.poster == null ? "" : p.poster).put("link", p.link == null ? "" : p.link)
                         .put("meta", p.meta).put("app", p.app == null ? "" : p.app).put("pkg", p.pkg == null ? "" : p.pkg)
-                        .put("detailed", p.detailed));
+                        .put("detailed", p.detailed).put("trakt", p.trakt));
             }
             SharedPreferences.Editor e = cache.edit().putString("picks", a.toString()).putInt("period", period).putLong("listAt", listAt)
                     .putString("language", listLanguage)
@@ -1129,6 +1200,7 @@ final class Recs {
             p.app = o.optString("app").isEmpty() ? null : o.optString("app");
             p.pkg = o.optString("pkg").isEmpty() ? null : o.optString("pkg");
             p.detailed = o.optBoolean("detailed");
+            p.trakt = o.optBoolean("trakt");
             out.add(p);
         }
         return out;

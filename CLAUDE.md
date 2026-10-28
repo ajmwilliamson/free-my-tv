@@ -54,6 +54,8 @@ before you do it, and let them do the taps on the TV.
    The same goes for the optional `watchmode_key` (free, watchmode.com; makes picks open the title's page): theirs, secret, only in `config.properties`.
    And for `plex_url` and `plex_token` (Google TV only; their Plex server's newest titles join the picks): the token opens
    their Plex account, so suggest a Plex Home managed user's (the README says how), and it goes only in `config.properties`.
+   And for `trakt_client_id` (Google TV only; the picks become their Trakt watchlist, opening in Stremio): theirs, only in
+   `config.properties`. They sign in on the TV (Home Settings > Trakt, a code at auth.trakt.tv/activate), never through you.
 5. **Build:** `./build.sh` → `FreeMyTV.apk`. Keep `freemytv.keystore`: updates must be signed with the same key.
 6. **Install:** `adb connect <IP>:5555`. The TV asks *Allow USB debugging?*: tell them to accept and tick *Always
    allow*. Then `adb install -r FreeMyTV.apk`. If it hangs, Google Play Protect is asking on the TV (Android 14:
@@ -273,6 +275,12 @@ entries; its system pieces are in `PROTECTED`. USB debugging opens ADB on 5555 t
   saving it. Never log it. Nothing may escape KeyPage's threads: `:home`'s watchdog counts it as a home screen crash.
   On LG and Samsung it's typed in Home Settings (no QR: a web app can't serve a page): `Prefs.tmdbKey()` (localStorage)
   wins over `CONFIG.tmdbKey`, and `Data.keyChanged()` fetches the picks again.
+- Trakt (`Trakt`): OAuth's device flow with the Client ID alone (Trakt's apps have had no secret since October 2026; the
+  device token and refresh take none; sign-out's revoke is a courtesy that may fail). The tokens live only in `trakt.json` on the TV, never in the log. Refresh
+  tokens work once, and both `:home` and the main process (`ScreensaverAlone`) fetch picks, so a refresh runs under a
+  file lock (`trakt.lock`) and reads the file again inside it. `Recs.fetchList` tries the watchlist first and falls back
+  to the trending picks; Trakt picks (`Pick.trakt`) open `stremio:///detail/movie|series/<imdb id>` in Stremio
+  (`Recs.STREMIO`) and skip Watchmode. Nothing may escape the sign-in threads (the watchdog, as with KeyPage).
 - On-screen text: `Ui.tr("English")`, translated from `app/assets/i18n/<lang>.json` (keyed by the English; one
   HashMap lookup, English when a language lacks it). Text built at runtime is a pattern: `Ui.trf("{n} min ago", "n", 12)`,
   never concatenated words. A key `"context|Text"` is the same English where a language may need another word
