@@ -182,6 +182,7 @@ final class Recs {
     private final Map<String, Poster> posters = new LinkedHashMap<>();   // narrow-card portraits, same keys as images
     private final Map<String, Backdrop> images = new LinkedHashMap<>(16, 0.75f, true);   // this hour's, built and ready to draw
     private final java.util.Set<String> pending = new java.util.HashSet<>();
+    private final java.util.Set<String> noPoster = new java.util.HashSet<>();   // posters that wouldn't download or decode
     private volatile List<Pick> picks = new ArrayList<>();
     private volatile int period = -1;
     private volatile long listAt;
@@ -348,6 +349,65 @@ final class Recs {
     /** Name of the service the pick is on ("Netflix"), or empty. */
     static String serviceName(Pick p) {
         return p == null || p.app == null ? "" : SERVICE_NAME.get(p.app);
+    }
+
+    /** Poster cards keep up to this many posters ready (320 × 442 each, about 0.6 MB). */
+    private static final int POSTERS_KEPT = 16;
+
+    /**
+     * The pick's ready poster card, on its own (the poster card style): null while it loads in the background (then
+     * notifies), or when the pick has none (see hasPoster: then its backdrop stands in).
+     */
+    Poster posterAlone(Pick p) {
+        if (p == null || p.backdrop == null) return null;
+        final String key = p.backdrop;
+        synchronized (images) {
+            Poster ready = posters.get(key);
+            if (ready != null || !hasPoster(p) || !pending.add("p:" + key)) return ready;
+        }
+        // On io, as downloads are: never two threads writing the same file.
+        io.execute(() -> {
+            try {
+                loadPosterAlone(p);
+            } finally {
+                synchronized (images) { pending.remove("p:" + key); }
+            }
+        });
+        return null;
+    }
+
+    /** The pick has a poster that can load (TMDB gave one, and it didn't fail here). */
+    boolean hasPoster(Pick p) {
+        if (p == null || p.poster == null || p.poster.isEmpty()) return false;
+        synchronized (images) {
+            return !noPoster.contains(p.poster);
+        }
+    }
+
+    /** Only the poster: a 500 × 750 image, about a fifth of a backdrop's pixels. */
+    private void loadPosterAlone(Pick p) {
+        if (!picks.contains(p)) return;   // a list fetched since
+        synchronized (images) {
+            if (posters.containsKey(p.backdrop)) return;
+        }
+        Poster poster = null;
+        try {
+            File f = posterFile(p);
+            if (f != null && !f.exists()) fetchFile(f, (HttpURLConnection) new URL(POSTERS + p.poster).openConnection());
+            poster = loadPoster(p);
+        } catch (IOException | RuntimeException | OutOfMemoryError e) {
+            AppLog.w("poster: " + e.getMessage());
+        }
+        synchronized (images) {
+            if (poster == null) {
+                noPoster.add(p.poster);
+            } else {
+                posters.put(p.backdrop, poster);
+                while (posters.size() > POSTERS_KEPT) posters.remove(posters.keySet().iterator().next());
+            }
+        }
+        if (poster != null) AppLog.w("poster \u201c" + p.title + "\u201d");
+        notifyListeners();
     }
 
     /** The pick's ready backdrop (or null: builds it in the background and notifies when it's ready). */
@@ -1152,7 +1212,8 @@ final class Recs {
                 images.put(p.backdrop, backdrop);
                 if (poster != null) posters.put(p.backdrop, poster);
                 while (images.size() > (forLight ? Prefs.cards() + 7 : 4)) images.remove(images.keySet().iterator().next());
-                posters.keySet().retainAll(images.keySet());
+                // Wide cards: a poster goes with its backdrop. Poster cards keep theirs apart (posterAlone).
+                if (!Prefs.posterCards()) posters.keySet().retainAll(images.keySet());
             }
             notifyListeners();
         } catch (IOException | RuntimeException | OutOfMemoryError e) {

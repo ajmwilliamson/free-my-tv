@@ -851,11 +851,12 @@ public class SettingsActivity extends Activity {
         }
 
         private String[] picksLabels() {
-            return new String[] {Ui.tr("Picks per tab"), Ui.tr("Picks from")};
+            return new String[] {Ui.tr("Picks per tab"), Ui.tr("Picks from"), Ui.tr("Card style")};
         }
 
         private String[] picksValues() {
-            return new String[] {String.valueOf(Prefs.cards()), someServicesOff ? Ui.tr("services|Some") : Ui.tr("services|All")};
+            return new String[] {String.valueOf(Prefs.cards()), someServicesOff ? Ui.tr("services|Some") : Ui.tr("services|All"),
+                    Prefs.posterCards() ? Ui.tr("Posters") : Ui.tr("Wide focus")};
         }
 
         private String[] settingValues() {
@@ -1112,6 +1113,8 @@ public class SettingsActivity extends Activity {
                 if (focus == 0) {
                     int n = Prefs.cards() - 3, span = Recs.MAX_CARDS - 3 + 1;
                     Prefs.setCards(3 + (n + dir + span) % span);
+                } else if (focus == 2) {
+                    Prefs.setPosterCards(!Prefs.posterCards());
                 }
                 return;
             }

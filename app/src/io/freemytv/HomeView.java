@@ -150,6 +150,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final Spring[] cardOpen = new Spring[Recs.MAX_CARDS];
     /** Picks per tab (Prefs.cards()), read when the cards update, not on every frame. */
     private int cardSlots = 3;
+    private boolean posterCards;   // Prefs.posterCards(): all cards tall, each its poster (read in updateCards)
     /** The row scrolls in whole cards: the focused one stays among the first three. */
     private final Spring cardScroll = new Spring(0.32f, 0.78f, 0);
     private final RectF[] cardRects = new RectF[Recs.MAX_CARDS];
@@ -1960,8 +1961,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (snap) heroFocus.snap(heroFocus.target);
         boolean topChanged = aim(topFocus, !sheetOpen && zone == Z_TOP ? topIndex : -1, snap);
         heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | topChanged;
-        heroChanged |= aim(cardOpen, cardIndex, snap);
-        float scrollTo = Math.max(0, cardIndex - 2);
+        heroChanged |= aim(cardOpen, posterCards ? -1 : cardIndex, snap);
+        // Wide: the wide card and two tall ones fill the row. Posters: five tall ones do.
+        float scrollTo = Math.max(0, cardIndex - (posterCards ? 4 : 2));
         heroChanged |= cardScroll.target != scrollTo;
         cardScroll.target = scrollTo;
         if (snap) cardScroll.snap(scrollTo);
@@ -3002,7 +3004,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         layoutCards();
     }
 
-    /** The cards side by side: the one at cardIndex wide, the others tall, sliding as `cardOpen` moves. */
+    /** The cards side by side: the one at cardIndex wide (poster cards: none), the others tall, sliding as `cardOpen` moves. */
     private void layoutCards() {
         float top = L_CARDS_TOP * k, ch = L_CARD_H * k, g = L_CARD_GAP * k, tall = L_TALL_W * k;
         float wide = (CONTENT_R - MARGIN) * k - 2 * tall - 2 * g, x = MARGIN * k - cardScroll.value * (tall + g);
@@ -3017,6 +3019,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** The three cards of the current tab (Explore, Movies, Shows) and the background taken from the first one. */
     private void updateCards() {
         cardSlots = Prefs.cards();
+        if (posterCards != Prefs.posterCards()) {
+            posterCards = Prefs.posterCards();
+            retarget(true);   // no card stays open, or the focused one opens
+        }
         List<Recs.Pick> list = recs.now(TAB_KIND[tab]);
         if (!samePicks(list, cards)) {
             cards = list;
@@ -3026,11 +3032,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         // This tab's cards, then the first three of the others (what shows at first): switching tabs is quick, and
         // the images stay under Recs's cap in memory.
-        for (Recs.Pick p : list) recs.backdrop(p);
+        for (Recs.Pick p : list) requestCard(p);
         for (int t = 0; t < TAB_KIND.length; t++) {
             if (t == tab) continue;
             List<Recs.Pick> other = recs.now(TAB_KIND[t]);
-            for (int i = 0; i < Math.min(3, other.size()); i++) recs.backdrop(other.get(i));
+            for (int i = 0; i < Math.min(3, other.size()); i++) requestCard(other.get(i));
         }
         // Picks bring their own background; without them (no TMDB key), your photo if there is one.
         boolean own = !picksOn() && Photos.on(getContext());
@@ -3038,6 +3044,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (b != null || (cards.isEmpty() && !own)) showBackdrop(b);
         heroDirty = true;
         spoken.focusMoved();    // new picks under the focused card
+    }
+
+    /** Starts loading what a card shows: its poster for poster cards (the backdrop where it has none), else its backdrop. */
+    private void requestCard(Recs.Pick p) {
+        if (posterCards && recs.hasPoster(p)) recs.posterAlone(p);
+        else recs.backdrop(p);
     }
 
     /** Your photo's background is ready (or new photos came in): draw it. */
@@ -3179,9 +3191,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         shadowDeep.setColor(Ui.alpha(0xFF000000, tone(0.14f, 0.32f) + tone(0.2f, 0.28f) * f));
         shadows.draw(c, tmp, r0, DEEP_BLUR * k, shadowDeep);
         c.restore();
-        Backdrop b = p == null ? null : recs.backdrop(p);
+        // Poster cards: the poster alone; the backdrop only for a pick without one.
+        boolean posterOnly = posterCards && recs.hasPoster(p);
+        Backdrop b = p == null || posterOnly ? null : recs.backdrop(p);
         Bitmap img = b == null ? null : b.wide;
-        Recs.Poster poster = recs.poster(p);
+        Recs.Poster poster = posterOnly ? recs.posterAlone(p) : recs.poster(p);
         float open = Ui.clamp(cardOpen[i].value);
         if (poster != null) {   // narrow: the poster; as the card widens the backdrop fades in over it
             float back = img == null ? 0 : Ui.clamp((open - 0.1f) / 0.6f);
@@ -3227,11 +3241,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (p == null || base.left < 0 || base.left > (CONTENT_R - 100) * k) return;
         fitPaint.set(lCardTitle);
         c.drawText(TextUtils.ellipsize(p.title, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 46 * k, lCardTitle);
-        if (open > 0.02f && p.meta != null && !p.meta.isEmpty()) {
+        // Wide cards: the open card's details. Poster cards: the details of the one at cardIndex, which may run under
+        // the next card (only its title is drawn there).
+        float info = posterCards ? (i == cardIndex ? 1 : 0) : open;
+        if (info > 0.02f && p.meta != null && !p.meta.isEmpty()) {
+            float room = posterCards ? Math.min(CONTENT_R * k - base.left, 2 * bw + L_CARD_GAP * k) : bw;
             fitPaint.set(lCardMeta);
             int a = lCardMeta.getAlpha();
-            lCardMeta.setAlpha(Math.round(a * open));
-            c.drawText(TextUtils.ellipsize(p.meta, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
+            lCardMeta.setAlpha(Math.round(a * info));
+            c.drawText(TextUtils.ellipsize(p.meta, fitPaint, room, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
             lCardMeta.setAlpha(a);
         }
     }

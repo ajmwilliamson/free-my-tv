@@ -141,6 +141,18 @@ final class Prefs {
 
     static void setCards(int n) { put("cards", n); }
 
+    /**
+     * The picks' cards: "wide" (the focused one widens to its photo, as it always did) or "posters" (all of them tall,
+     * side by side, each only its poster: quicker to load).
+     */
+    static boolean posterCards() { return "posters".equals(sp().getString("cardStyle", "wide")); }
+
+    /** Posters show 4 or more: fewer would leave most of the row empty. */
+    static void setPosterCards(boolean on) {
+        put("cardStyle", on ? "posters" : "wide");
+        if (on && cards() < 4) setCards(4);
+    }
+
     // MARK: - Picks from
 
     private static String offList;
