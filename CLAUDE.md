@@ -258,7 +258,7 @@ entries; its system pieces are in `PROTECTED`. USB debugging opens ADB on 5555 t
   size (and the picks use TMDB's w1280), and the shelf logos have a copy at the resting size and one at the focused
   size, so both draw pixel for pixel.
 - Poster cards (`Prefs.posterCards`, Home Settings > Picks > Card style; Google TV only, not in `web/` yet): every card
-  tall, none opens, and each loads only its poster (`Recs.posterAlone`, about a fifth of a backdrop's decode); the
+  tall, none opens, titles only (no details line), and each loads only its poster (`Recs.posterAlone`, about a fifth of a backdrop's decode); the
   background still takes the first card's backdrop, and a pick without a poster falls back to its backdrop.
 - TMDB's API is reached at `api.tmdb.org`, TMDB's own mirror of `api.themoviedb.org` on the images' domain
   (`image.tmdb.org`): some ISPs block the other name (Jio in India, #327).

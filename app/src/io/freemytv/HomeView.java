@@ -3241,15 +3241,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (p == null || base.left < 0 || base.left > (CONTENT_R - 100) * k) return;
         fitPaint.set(lCardTitle);
         c.drawText(TextUtils.ellipsize(p.title, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 46 * k, lCardTitle);
-        // Wide cards: the open card's details. Poster cards: the details of the one at cardIndex, which may run under
-        // the next card (only its title is drawn there).
-        float info = posterCards ? (i == cardIndex ? 1 : 0) : open;
-        if (info > 0.02f && p.meta != null && !p.meta.isEmpty()) {
-            float room = posterCards ? Math.min(CONTENT_R * k - base.left, 2 * bw + L_CARD_GAP * k) : bw;
+        // The open card's details (poster cards: titles only).
+        if (!posterCards && open > 0.02f && p.meta != null && !p.meta.isEmpty()) {
             fitPaint.set(lCardMeta);
             int a = lCardMeta.getAlpha();
-            lCardMeta.setAlpha(Math.round(a * info));
-            c.drawText(TextUtils.ellipsize(p.meta, fitPaint, room, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
+            lCardMeta.setAlpha(Math.round(a * open));
+            c.drawText(TextUtils.ellipsize(p.meta, fitPaint, bw, TextUtils.TruncateAt.END).toString(), base.left, base.bottom + 80 * k, lCardMeta);
             lCardMeta.setAlpha(a);
         }
     }

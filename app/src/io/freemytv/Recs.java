@@ -322,20 +322,35 @@ final class Recs {
         }
         if (list.isEmpty()) return list;
         long hour = System.currentTimeMillis() / 3600_000L;
-        // Prefs.cards() per hour, never two from the same franchise ("Law & Order" and "Law & Order: Special…").
+        int cards = Prefs.cards();
+        // Movies and Shows leave out what Explore shows this hour, so each tab has its own; only when that leaves too few
+        // do they take some of Explore's.
+        java.util.Set<String> explore = new java.util.HashSet<>();
+        if (kind != null) for (Pick p : now(null)) explore.add(key(p));
         List<Pick> out = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
-        int cards = Prefs.cards();
-        boolean plex = false;
+        boolean plex = rotate(list, hour, cards, explore, out, seen, false);
+        if (out.size() < cards && !explore.isEmpty()) rotate(list, hour, cards, new java.util.HashSet<>(), out, seen, plex);
+        return out;
+    }
+
+    /**
+     * Adds this hour's turn of `list` to `out`, up to `cards`: none of `avoid`, never two from the same franchise ("Law &
+     * Order" and "Law & Order: Special…", through `seen`), one Plex title at most (`plex`: one is in already). Says
+     * whether a Plex title is in now.
+     */
+    private static boolean rotate(List<Pick> list, long hour, int cards, Set<String> avoid, List<Pick> out,
+            Set<String> seen, boolean plex) {
         for (int i = 0; i < list.size() && out.size() < cards; i++) {
             Pick p = list.get((int) ((hour * cards + i) % list.size()));
             if (p.id < 0 && plex) continue;   // a Plex title is the surprise: one per tab, not the movie and the show together
+            if (avoid.contains(key(p))) continue;
             if (seen.add(franchise(p.title))) {
                 out.add(p);
                 plex |= p.id < 0;
             }
         }
-        return out;
+        return plex;
     }
 
     /** "Law & Order: Special Victims Unit" → "law & order" (what comes before ":" or " - "). */
