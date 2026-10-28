@@ -34,8 +34,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Home screen picks ("This morning / afternoon / tonight"): what's trending this week plus recent releases, only from
@@ -173,6 +175,8 @@ final class Recs {
     private final Context context;
     private final SharedPreferences cache;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    /** Lookups and downloads beside io, a few at a time: TMDB takes about half a second for each, one by one. */
+    private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new ArrayList<>();
     private final Map<String, Poster> posters = new LinkedHashMap<>();   // narrow-card portraits, same keys as images
@@ -393,21 +397,14 @@ final class Recs {
             try {
                 if (stale) fetchList(p);
                 // One failing title doesn't stop the others; whatever has no app on the TV is not downloaded.
-                int failures = 0, tried = 0;
-                String last = "";
-                for (Pick pick : wanted()) {
-                    tried++;
-                    try {
-                        if (!pick.detailed) fetchDetails(pick);
-                        if (pick.pkg != null) download(pick);
-                    } catch (Exception e) {
-                        failures++;
-                        last = e.getMessage() == null ? e.toString() : e.getMessage();
-                    }
-                    findLink(pick);
-                }
+                List<Pick> wanted = wanted();
+                Outcome done = each(wanted, pick -> {
+                    if (!pick.detailed) fetchDetails(pick);
+                    if (pick.pkg != null) download(pick);
+                });
+                for (Pick pick : wanted) findLink(pick);
                 save();
-                if (tried > 0 && failures == tried) throw new IOException(last);
+                if (!wanted.isEmpty() && done.failures == wanted.size()) throw new IOException(done.last);
                 error = "";
                 failedAt = 0;
             } catch (Exception e) {
@@ -418,8 +415,59 @@ final class Recs {
                 fetching = false;
                 writeStatus();
                 notifyListeners();
+                prefetchTrakt();
             }
         });
+    }
+
+    /** What `each` did: how many failed, and the last error. */
+    private static final class Outcome {
+        int failures;
+        String last = "";
+    }
+
+    private interface Work {
+        void run(Pick p) throws Exception;
+    }
+
+    /** Runs `work` on every pick on the pool, and waits for all of them. Nothing thrown leaves it. */
+    private Outcome each(List<Pick> list, Work work) {
+        Outcome out = new Outcome();
+        List<Future<?>> running = new ArrayList<>();
+        for (Pick p : list) running.add(pool.submit(() -> {
+            work.run(p);
+            return null;
+        }));
+        for (Future<?> f : running) {
+            try {
+                f.get();
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                out.failures++;
+                out.last = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                out.failures++;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * A Trakt list is 24 titles, and the hours bring them all round: the images not shown yet come now, so a new hour's
+     * cards aren't empty. Four at a time, each four their own io task, so a picture the screen asks for waits for one
+     * batch at most.
+     */
+    private void prefetchTrakt() {
+        List<Pick> rest = new ArrayList<>();
+        for (Pick p : picks) if (p.trakt && p.detailed && p.pkg != null && !hasImage(p)) rest.add(p);
+        for (int i = 0; i < rest.size(); i += 4) {
+            List<Pick> batch = rest.subList(i, Math.min(rest.size(), i + 4));
+            io.execute(() -> {
+                Outcome done = each(batch, this::download);
+                if (done.failures > 0) AppLog.w("trakt images: " + done.last);
+            });
+        }
     }
 
     /** Home screen design: the ready images are rebuilt for it (the light design uses cards, not the whole photo). */
@@ -934,7 +982,7 @@ final class Recs {
     /** This turn's TRAKT_EACH of the watchlist's movies or shows, with their TMDB details (titles without a photo left out). */
     private List<Pick> traktPicks(String type, String kind, long turn) throws Exception {
         List<String[]> all = Trakt.watchlist(context, type);
-        List<Pick> out = new ArrayList<>();
+        List<Pick> found = new ArrayList<>();
         int n = all.size(), from = n <= TRAKT_EACH ? 0 : (int) Math.floorMod(turn * TRAKT_EACH, (long) n);
         for (int i = 0; i < Math.min(n, TRAKT_EACH); i++) {
             String[] item = all.get((from + i) % n);
@@ -947,13 +995,11 @@ final class Recs {
             pick.trakt = true;
             // Stremio's own route to the title page (tested on a BRAVIA: movie and series pages open); no IMDb id: its home.
             if (!item[1].isEmpty()) pick.link = "stremio:///detail/" + (kind.equals("movie") ? "movie" : "series") + "/" + item[1];
-            try {
-                fetchDetails(pick);
-            } catch (Exception e) {
-                continue;
-            }
-            if (!pick.backdrop.isEmpty()) out.add(pick);
+            found.add(pick);
         }
+        each(found, this::fetchDetails);   // a title TMDB doesn't answer for is left out, below
+        List<Pick> out = new ArrayList<>();
+        for (Pick pick : found) if (pick.detailed && !pick.backdrop.isEmpty()) out.add(pick);
         return out;
     }
 
