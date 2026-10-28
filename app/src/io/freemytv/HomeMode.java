@@ -94,6 +94,12 @@ final class HomeMode {
         // KTC (NextStar; MediaTek)
         "tv.anoki.acr.controller",                                                    // Anoki ACR: watches what's on screen
         "com.mediatek.tv.retaildemo", "com.electronic.manual",                        // store demo, manual
+        // Sony (BRAVIA BF1, MediaTek, Google TV 12)
+        "tv.samba.ssm",                                                               // Samba TV ACR: watches what's on screen
+        "com.sony.dtv.promos", "com.sony.dtv.sonyselect",                             // promo banners, promoted app downloads
+        "com.sony.dtv.demosupport", "com.sony.dtv.multiscreendemo",                   // store demos
+        "com.sony.dtv.helpguidecontents",                                             // manual
+        "com.sonypicturescore",                                                       // BRAVIA CORE (its button: Remote Buttons)
         // HY300 projectors (Amlogic txhd2, Android 13): JmLauncher opens it from the Home button (JM_HOME); off only
         // once JM_HOME is ours
         HTC_HOME,                                                                     // the stock home (and an ad SDK)
@@ -157,6 +163,19 @@ final class HomeMode {
         "com.fengmi.testsuite", "android.autoinstalls.config.fomovie",
         "uk.co.freeview.tifbridge",
         "uk.co.freeview.mdsclient", "uk.co.freeview.fvpconfigauth",
+        // Sony (BRAVIA BF1, MediaTek, Google TV 12): system service, service menu, remote and connected devices, tuners,
+        // sound, IP control, AirPlay, keyboard, voice, timers, updates; Freeview Play's broadcaster apps (UK)
+        "com.sony.dtv.sonysystemservice", "com.sony.dtv.sonyservicemode", "com.sony.dtv.remotecontrolsettings",
+        "com.sony.dtv.connecteddevicesettings", "com.sony.dtv.tvinput.dvbtuner", "com.sony.dtv.audiosysteminfoprovider",
+        "com.sony.dtv.ipcontrol", "com.sony.dtv.ipcontrolaux", "com.sony.dtv.airplayapp", "com.sony.dtv.applicationdisabler",
+        "com.sony.dtv.provider.modelvariation", "com.sony.dtv.ime.chww", "com.sony.dtv.voicesearch",
+        "com.sony.dtv.m2.devicecontrolservice", "com.sony.dtv.timers", "com.sony.dtv.interactivetvutil",
+        "com.sony.dtv.operatorapputil.service", "com.sony.dtv.b2b.vendorprotocol", "com.sony.gaus.updatecenter",
+        "android.autoinstalls.config.sony.bluefin", "com.youview.poa", "com.sony.dtv.iplayerlauncher",
+        "com.sony.dtv.itvlauncher", "com.sony.dtv.all4launcher", "com.sony.dtv.my5launcher",
+        "com.mediatek.dtv.tvinput.atsctuner", "com.mediatek.dtv.tvinput.isdbtuner",
+        "com.mediatek.dtv.tvinput.framework.server", "com.mediatek.aowtis", "com.mediatek.tv.keyevent",
+        "com.mediatek.tv.sonyonekey", "com.mediatek.tv.simpleremote",
         // onn (Walmart; Amlogic S905Y4, 4K Streaming Box, Google TV 14): remote pairing, update notices, the remote's
         // app buttons (GLOBAL_BUTTON), hardware info, Amlogic system, settings, mic switch and launcher provider
         "com.onn.bluetoothconnect", "com.onn.btpairoverlay", "com.onn.updatenotification", "com.gretzky.GlobalKey",
