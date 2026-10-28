@@ -1387,9 +1387,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float right = CONTENT_R * k;
         applyTone();
         Paint text = clock ? lClockQuote : lQuote;
-        // The corner buttons' names appear in this row: the quotes fade out while one of them has focus.
-        float fade = 1;
-        for (int i = 3; i < 3 + lightButtons.size() && !clock; i++) fade = Math.min(fade, 1 - Ui.clamp(topFocus[i].value));
+        // The corner buttons' names appear in this row: the quotes fade out while one of them has focus. By the sum of
+        // their focus: moving from one button to the next, one fades as the other comes (the same spring), so the sum
+        // stays at 1 and the quotes don't show through halfway.
+        float focused = 0;
+        for (int i = 3; i < 3 + lightButtons.size() && !clock; i++) focused += topFocus[i].value;
+        float fade = 1 - Ui.clamp(focused);
         if (fade <= 0.01f) return;
         int textColor = text.getColor();
         text.setColor(Ui.alpha(textColor, fade));
