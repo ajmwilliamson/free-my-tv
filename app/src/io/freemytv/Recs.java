@@ -1126,6 +1126,9 @@ final class Recs {
 
     /** Reads the photo (≥ the UI's width) and builds the backdrop (Backdrop: cards plus frosted and glass versions). */
     private void loadImage(Pick p) {
+        // A list fetched since it was asked for (the screen asks at its first draw, before a new list comes): 0.4 s
+        // of decoding each, in the queue ahead of the new list's cards.
+        if (!picks.contains(p)) return;
         synchronized (images) {
             if (images.containsKey(p.backdrop)) return;
         }
